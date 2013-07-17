@@ -4,13 +4,41 @@ from django.core.mail.backends.base import BaseEmailBackend
 from django.core.mail import EmailMultiAlternatives
 from django.core.exceptions import ImproperlyConfigured
 
+from google.appengine.api.app_identity import get_application_id
 from google.appengine.api import mail as aeemail
 from google.appengine.runtime import apiproxy_errors
 
+def _check_for_app_admins(message):
+    # "admins@APP-ID.appspotmail.com"
+    # ignore multiple admins adresses...
+    for to in message.to:
+        if 'admins@%s.appspotmail.com' % get_application_id() in to or '<admins@%s.appspotmail.com>' % get_application_id() in to:
+            return True
+
+def _send_app_admins(message):
+    kw = {}
+
+    # kw['to'] = message.to => unused warning
+    # those sould be empty
+    # kw['cc'] = message.cc
+    # kw['bcc'] = message.bcc
+    if hasattr(message, 'reply_to'):
+        kw['reply_to'] = message.reply_to    
+    if hasattr(message, 'html'):
+        kw['html'] = message.html
+    if hasattr(message, 'attachments'):
+        kw['attachments'] = message.attachments
+    if hasattr(message, 'headers'):
+        kw['headers'] = message.headers
+    
+    aeemail.send_mail_to_admins(message.sender, message.subject, message.body, **kw)
 
 def _send_deferred(message, fail_silently=False):
     try:
-        message.send()
+        if _check_for_app_admins(message):
+            _send_app_admins(message)
+        else:
+            message.send()
     except (aeemail.Error, apiproxy_errors.Error):
         if not fail_silently:
             raise
@@ -71,7 +99,10 @@ class EmailBackend(BaseEmailBackend):
             self._defer_message(message)
             return True
         try:
-            message.send()
+            if _check_for_app_admins(message):
+                _send_app_admins(message)
+            else:
+                message.send()
         except (aeemail.Error, apiproxy_errors.Error):
             if not self.fail_silently:
                 raise
